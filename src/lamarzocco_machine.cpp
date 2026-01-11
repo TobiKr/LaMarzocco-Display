@@ -4,6 +4,7 @@
 #include "water_alarm.h"
 #include "brewing_display.h"
 #include "activity_monitor.h"
+#include "update_screen.h"
 #include <ArduinoJson.h>
 
 LaMarzoccoMachine* LaMarzoccoMachine::_instance = nullptr;
@@ -165,8 +166,12 @@ void LaMarzoccoMachine::_websocket_message_handler(const String& message) {
         if (machine_status) {
             if (!last_brewing_state_valid || is_brewing != last_brewing_state) {
                 activity_monitor_mark_machine_activity();
+                bool was_brewing = last_brewing_state_valid && last_brewing_state;
                 last_brewing_state = is_brewing;
                 last_brewing_state_valid = true;
+                if (_instance && was_brewing && !is_brewing) {
+                    _instance->request_stats_refresh();
+                }
             }
         }
         
@@ -354,6 +359,16 @@ void LaMarzoccoMachine::loop() {
     // Call websocket loop regularly - this is critical for connection
     _websocket.loop();
 
+    if (_stats_refresh_pending) {
+        unsigned long now = millis();
+        static const unsigned long STATS_REFRESH_MIN_INTERVAL_MS = 5000;
+        if (now - _last_stats_refresh_ms >= STATS_REFRESH_MIN_INTERVAL_MS) {
+            _stats_refresh_pending = false;
+            _last_stats_refresh_ms = now;
+            _refresh_shot_counters();
+        }
+    }
+
     // Auto-reconnect logic: If disconnected, try to reconnect periodically
     // This ensures we get a fresh access token instead of reusing an expired one
     static unsigned long last_reconnect_attempt = 0;
@@ -367,4 +382,32 @@ void LaMarzoccoMachine::loop() {
             connect_websocket();  // This will refresh the access token and reconnect
         }
     }
+}
+
+void LaMarzoccoMachine::request_stats_refresh() {
+    _stats_refresh_pending = true;
+}
+
+void LaMarzoccoMachine::_refresh_shot_counters() {
+    String serial = _client.get_serial_number();
+    if (serial.length() == 0) {
+        return;
+    }
+
+    JsonDocument response;
+    String endpoint = "/things/" + serial + "/stats/COFFEE_AND_FLUSH_COUNTER/1";
+    if (!_client.api_call("GET", endpoint, nullptr, &response)) {
+        debugln("Failed to fetch coffee/flush counters");
+        return;
+    }
+
+    JsonVariant output = response["output"];
+    if (output.isNull()) {
+        debugln("Coffee/flush counter response missing output");
+        return;
+    }
+
+    uint32_t total_coffee = output["totalCoffee"] | 0;
+    uint32_t total_flush = output["totalFlush"] | 0;
+    updateShotCounters(total_coffee, total_flush);
 }

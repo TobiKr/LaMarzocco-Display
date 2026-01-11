@@ -70,6 +70,45 @@ lv_obj_set_align( ui_timeLabel, LV_ALIGN_CENTER );
 lv_label_set_text(ui_timeLabel,"");
 lv_obj_set_style_text_font(ui_timeLabel, &lv_font_montserrat_26, LV_PART_MAIN| LV_STATE_DEFAULT);
 
+ui_CoffeeCountIcon = lv_img_create(ui_mainScreen);
+lv_img_set_src(ui_CoffeeCountIcon, &ui_img_coffee_png);
+lv_obj_set_width( ui_CoffeeCountIcon, LV_SIZE_CONTENT);  /// 1
+lv_obj_set_height( ui_CoffeeCountIcon, LV_SIZE_CONTENT);   /// 1
+lv_obj_set_x( ui_CoffeeCountIcon, -110 );
+lv_obj_set_y( ui_CoffeeCountIcon, -94 );
+lv_obj_set_align( ui_CoffeeCountIcon, LV_ALIGN_CENTER );
+lv_obj_add_flag( ui_CoffeeCountIcon, LV_OBJ_FLAG_ADV_HITTEST );   /// Flags
+lv_obj_clear_flag( ui_CoffeeCountIcon, LV_OBJ_FLAG_SCROLLABLE );    /// Flags
+
+ui_CoffeeCountLabel = lv_label_create(ui_mainScreen);
+lv_obj_set_width( ui_CoffeeCountLabel, LV_SIZE_CONTENT);  /// 1
+lv_obj_set_height( ui_CoffeeCountLabel, LV_SIZE_CONTENT);   /// 1
+lv_obj_set_x( ui_CoffeeCountLabel, -70 );
+lv_obj_set_y( ui_CoffeeCountLabel, -95 );
+lv_obj_set_align( ui_CoffeeCountLabel, LV_ALIGN_CENTER );
+lv_label_set_text(ui_CoffeeCountLabel,"0");
+lv_obj_set_style_text_font(ui_CoffeeCountLabel, &lv_font_montserrat_20, LV_PART_MAIN| LV_STATE_DEFAULT);
+
+ui_FlushCountIcon = lv_img_create(ui_mainScreen);
+lv_img_set_src(ui_FlushCountIcon, &ui_img_drop_2_png);
+lv_img_set_zoom(ui_FlushCountIcon, 128);
+lv_obj_set_width( ui_FlushCountIcon, LV_SIZE_CONTENT);  /// 1
+lv_obj_set_height( ui_FlushCountIcon, LV_SIZE_CONTENT);   /// 1
+lv_obj_set_x( ui_FlushCountIcon, -30 );
+lv_obj_set_y( ui_FlushCountIcon, -94 );
+lv_obj_set_align( ui_FlushCountIcon, LV_ALIGN_CENTER );
+lv_obj_add_flag( ui_FlushCountIcon, LV_OBJ_FLAG_ADV_HITTEST );   /// Flags
+lv_obj_clear_flag( ui_FlushCountIcon, LV_OBJ_FLAG_SCROLLABLE );    /// Flags
+
+ui_FlushCountLabel = lv_label_create(ui_mainScreen);
+lv_obj_set_width( ui_FlushCountLabel, LV_SIZE_CONTENT);  /// 1
+lv_obj_set_height( ui_FlushCountLabel, LV_SIZE_CONTENT);   /// 1
+lv_obj_set_x( ui_FlushCountLabel, 10 );
+lv_obj_set_y( ui_FlushCountLabel, -95 );
+lv_obj_set_align( ui_FlushCountLabel, LV_ALIGN_CENTER );
+lv_label_set_text(ui_FlushCountLabel,"0");
+lv_obj_set_style_text_font(ui_FlushCountLabel, &lv_font_montserrat_20, LV_PART_MAIN| LV_STATE_DEFAULT);
+
 ui_Arc2 = lv_arc_create(ui_mainScreen);
 lv_obj_set_width( ui_Arc2, 150);
 lv_obj_set_height( ui_Arc2, 150);

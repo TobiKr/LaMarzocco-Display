@@ -37,15 +37,21 @@ public:
     
     // Loop (call in main loop)
     void loop();
+
+    // Request a refresh of coffee/flush counters
+    void request_stats_refresh();
     
 private:
     LaMarzoccoClient& _client;
     LaMarzoccoWebSocket& _websocket;
     bool _power_state;
     bool _steam_state;
+    bool _stats_refresh_pending = false;
+    unsigned long _last_stats_refresh_ms = 0;
     
     // WebSocket message handler
     static void _websocket_message_handler(const String& message);
     static LaMarzoccoMachine* _instance;
-};
 
+    void _refresh_shot_counters();
+};

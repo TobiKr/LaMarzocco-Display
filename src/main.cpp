@@ -237,6 +237,9 @@ void setup()
             g_machine = new LaMarzoccoMachine(*g_client, *g_websocket);
             
             debugln("La Marzocco client initialized");
+
+            // Initial refresh of coffee/flush counters
+            g_machine->request_stats_refresh();
             
             // Auto-connect WebSocket on startup
             debugln("Auto-connecting to WebSocket...");

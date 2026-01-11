@@ -175,6 +175,34 @@ void updateStatusImages(void)
     }
 }
 
+void updateShotCounters(uint32_t coffee_count, uint32_t flush_count)
+{
+    static uint32_t last_coffee_count = UINT32_MAX;
+    static uint32_t last_flush_count = UINT32_MAX;
+
+    if (coffee_count == last_coffee_count && flush_count == last_flush_count) {
+        return;
+    }
+
+    char coffee_str[16];
+    char flush_str[16];
+    snprintf(coffee_str, sizeof(coffee_str), "%lu", static_cast<unsigned long>(coffee_count));
+    snprintf(flush_str, sizeof(flush_str), "%lu", static_cast<unsigned long>(flush_count));
+
+    if (gui_mutex && xSemaphoreTake(gui_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (ui_CoffeeCountLabel) {
+            lv_label_set_text(ui_CoffeeCountLabel, coffee_str);
+        }
+        if (ui_FlushCountLabel) {
+            lv_label_set_text(ui_FlushCountLabel, flush_str);
+        }
+        xSemaphoreGive(gui_mutex);
+    }
+
+    last_coffee_count = coffee_count;
+    last_flush_count = flush_count;
+}
+
 // Show NoConnectionScreen with custom error message
 // This function redirects to the NoConnectionScreen and updates the error label
 // Usage example: showNoConnectionScreen("WiFi Disconnected!\nPlease reconnect");
