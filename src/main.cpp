@@ -129,6 +129,8 @@ void setup()
     }
   }
 
+  amoled.setRotation(DISPLAY_ROTATION);
+
   updateSerialLoggingPowerState(true);
 
   activity_monitor_init(USER_INACTIVITY_TIMEOUT_MS, MACHINE_INACTIVITY_TIMEOUT_MS);
