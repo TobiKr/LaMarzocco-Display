@@ -40,6 +40,11 @@ public:
 
     // Request a refresh of coffee/flush counters
     void request_stats_refresh();
+
+    // Fetch the machine state over REST. The WebSocket only carries changes,
+    // so without this the display has nothing to show until the machine does
+    // something.
+    bool refresh_dashboard();
     
 private:
     LaMarzoccoClient& _client;
@@ -47,10 +52,17 @@ private:
     bool _power_state;
     bool _steam_state;
     bool _stats_refresh_pending = false;
+    // The first state the display shows has to be fetched: the cloud sends a
+    // message only when something changes, and a machine in standby changes
+    // nothing.
+    bool _dashboard_refresh_pending = true;
+    bool _websocket_was_connected = false;
     unsigned long _last_stats_refresh_ms = 0;
+    unsigned long _last_dashboard_refresh_ms = 0;
     
     // WebSocket message handler
     static void _websocket_message_handler(const String& message);
+    static void _process_dashboard(JsonDocument& doc);
     static LaMarzoccoMachine* _instance;
 
     void _refresh_shot_counters();
