@@ -145,8 +145,17 @@ static void start_brewing(int64_t start_time) {
  * Stop brewing mode
  */
 static void stop_brewing(void) {
-    if (g_state == BREWING_STATE_IDLE) {
-        return;  // Already stopped
+    // Every dashboard message that does not say "Brewing" arrives here, and a
+    // machine at rest sends plenty of them - a boiler reaching temperature, a
+    // status change after the shot. Only leaving an active shot is a stop.
+    //
+    // Without this the second message ran the ending a second time while the
+    // final time was still flashing. The start time had already been cleared
+    // by the first one, so the elapsed time came out as zero: the display
+    // flashed "0" instead of the time the shot took, and the three seconds
+    // started over.
+    if (g_state != BREWING_STATE_ACTIVE) {
+        return;
     }
     
     brewing_debugln("[Brewing] ===== STOPPING BREWING MODE =====");
