@@ -15,6 +15,229 @@ LaMarzoccoMachine::LaMarzoccoMachine(LaMarzoccoClient& client, LaMarzoccoWebSock
     _websocket.set_message_callback(_websocket_message_handler);
 }
 
+// Turns a dashboard payload into the state on screen. The same widgets
+// arrive over the WebSocket and from a REST fetch, so both go through here.
+void LaMarzoccoMachine::_process_dashboard(JsonDocument& doc) {
+    // Variables to store extracted data
+    const char* machine_status = nullptr;
+    const char* machine_mode = nullptr;
+    const char* coffee_boiler_status = nullptr;
+    int64_t coffee_ready_time = 0;
+    float coffee_target_temp = 0.0;
+    const char* steam_boiler_status = nullptr;
+    int64_t steam_ready_time = 0;
+    const char* steam_target_level = nullptr;
+    bool no_water_alarm = false;
+    bool is_brewing = false;
+    int64_t brewing_start_time = 0;
+    
+    // Parse widgets array to extract boiler and machine status
+    if (doc.containsKey("widgets")) {
+        JsonArray widgets = doc["widgets"].as<JsonArray>();
+        Serial.print("Widgets count: ");
+        Serial.println(widgets.size());
+        
+        for (JsonVariant widget : widgets) {
+            const char* code = widget["code"];
+            if (!code) continue;
+            
+            // Extract machine status
+            if (strcmp(code, "CMMachineStatus") == 0) {
+                Serial.println("✓ Found CMMachineStatus widget");
+                JsonObject output = widget["output"].as<JsonObject>();
+                
+                machine_status = output["status"];
+                machine_mode = output["mode"];
+                
+                // Check if brewing
+                if (machine_status && strcmp(machine_status, "Brewing") == 0) {
+                    is_brewing = true;
+                    // Extract brewingStartTime
+                    if (output.containsKey("brewingStartTime") && !output["brewingStartTime"].isNull()) {
+                        brewing_start_time = output["brewingStartTime"].as<long long>();
+                        Serial.print("☕ Brewing started at: ");
+                        Serial.println((long long)brewing_start_time);
+                    }
+                } else {
+                    is_brewing = false;
+                    brewing_start_time = 0;
+                }
+                
+                if (machine_status) {
+                    _instance->_power_state = (strcmp(machine_status, "PoweredOn") == 0);
+                    Serial.print("📊 Machine status: ");
+                    Serial.print(machine_status);
+                    if (machine_mode) {
+                        Serial.print(" (mode: ");
+                        Serial.print(machine_mode);
+                        Serial.print(")");
+                    }
+                    Serial.println();
+                }
+            }
+            // Extract coffee boiler status and ready time
+            else if (strcmp(code, "CMCoffeeBoiler") == 0) {
+                Serial.println("☕ Found CMCoffeeBoiler widget");
+                JsonObject output = widget["output"].as<JsonObject>();
+                
+                coffee_boiler_status = output["status"];
+                if (output.containsKey("readyStartTime") && !output["readyStartTime"].isNull()) {
+                    coffee_ready_time = output["readyStartTime"].as<long long>();
+                }
+                if (output.containsKey("targetTemperature")) {
+                    coffee_target_temp = output["targetTemperature"].as<float>();
+                }
+                
+                Serial.print("  Status: ");
+                Serial.print(coffee_boiler_status ? coffee_boiler_status : "null");
+                Serial.print(", TargetTemp: ");
+                Serial.print(coffee_target_temp);
+                Serial.print("°C, ReadyStartTime: ");
+                Serial.println((long long)coffee_ready_time);
+            }
+            // Extract steam boiler status and ready time
+            else if (strcmp(code, "CMSteamBoilerLevel") == 0) {
+                Serial.println("♨️  Found CMSteamBoilerLevel widget");
+                JsonObject output = widget["output"].as<JsonObject>();
+                
+                steam_boiler_status = output["status"];
+                if (output.containsKey("readyStartTime") && !output["readyStartTime"].isNull()) {
+                    steam_ready_time = output["readyStartTime"].as<long long>();
+                }
+                if (output.containsKey("targetLevel")) {
+                    steam_target_level = output["targetLevel"];
+                }
+                
+                // Update internal steam state based on status
+                if (steam_boiler_status) {
+                    if (strcmp(steam_boiler_status, "Off") != 0 && strcmp(steam_boiler_status, "StandBy") != 0) {
+                        _instance->_steam_state = true;
+                    } else {
+                        _instance->_steam_state = false;
+                    }
+                }
+                
+                Serial.print("  Status: ");
+                Serial.print(steam_boiler_status ? steam_boiler_status : "null");
+                Serial.print(", TargetLevel: ");
+                Serial.print(steam_target_level ? steam_target_level : "null");
+                Serial.print(", ReadyStartTime: ");
+                Serial.println((long long)steam_ready_time);
+            }
+            // Check for NoWater alarm
+            else if (strcmp(code, "CMNoWater") == 0) {
+                Serial.println("💧 Found CMNoWater widget");
+                JsonObject output = widget["output"].as<JsonObject>();
+                
+                if (output.containsKey("allarm")) {
+                    no_water_alarm = output["allarm"].as<bool>();
+                    Serial.print("  NoWater alarm: ");
+                    Serial.println(no_water_alarm ? "TRUE ⚠️" : "false");
+                }
+            }
+        }
+    }
+
+    static bool last_brewing_state = false;
+    static bool last_brewing_state_valid = false;
+    if (machine_status) {
+        if (!last_brewing_state_valid || is_brewing != last_brewing_state) {
+            activity_monitor_mark_machine_activity();
+            bool was_brewing = last_brewing_state_valid && last_brewing_state;
+            last_brewing_state = is_brewing;
+            last_brewing_state_valid = true;
+            if (_instance && was_brewing && !is_brewing) {
+                _instance->request_stats_refresh();
+            }
+        }
+    }
+    
+    // Check if any boiler reports NoWater status
+    if (coffee_boiler_status && strcmp(coffee_boiler_status, "NoWater") == 0) {
+        Serial.println("⚠️  Coffee boiler reports NoWater!");
+        no_water_alarm = true;
+    }
+    if (steam_boiler_status && strcmp(steam_boiler_status, "NoWater") == 0) {
+        Serial.println("⚠️  Steam boiler reports NoWater!");
+        no_water_alarm = true;
+    }
+    
+    // Update water alarm state
+    water_alarm_set(no_water_alarm);
+    
+    // Update brewing display
+    brewing_display_update(is_brewing, brewing_start_time);
+    
+    // Update boiler displays if we have machine status
+    // Boiler displays (labels) continue to update even during water alarm
+    // Only the arcs are hidden by water_alarm system
+    if (machine_status) {
+        Serial.println("\n🔄 Updating boiler displays...");
+        
+        // Format temperature and level strings
+        char coffee_temp_str[16] = "";
+        char steam_level_str[16] = "";
+        
+        if (coffee_target_temp > 0) {
+            snprintf(coffee_temp_str, sizeof(coffee_temp_str), "%.0f°C", coffee_target_temp);
+        }
+        
+        if (steam_target_level) {
+            // Convert "Level2" to "L2", "Level1" to "L1", etc.
+            if (strncmp(steam_target_level, "Level", 5) == 0) {
+                snprintf(steam_level_str, sizeof(steam_level_str), "L%s", steam_target_level + 5);
+            } else {
+                strncpy(steam_level_str, steam_target_level, sizeof(steam_level_str) - 1);
+            }
+        }
+        
+        // If machine is OFF or StandBy, use that for both boilers
+        if (strcmp(machine_status, "Off") == 0 || strcmp(machine_status, "StandBy") == 0) {
+            boiler_display_update(BOILER_COFFEE, machine_status, 
+                                 coffee_boiler_status ? coffee_boiler_status : "Off", 
+                                 coffee_ready_time,
+                                 coffee_temp_str[0] ? coffee_temp_str : nullptr);
+            boiler_display_update(BOILER_STEAM, machine_status, 
+                                 steam_boiler_status ? steam_boiler_status : "Off", 
+                                 steam_ready_time,
+                                 steam_level_str[0] ? steam_level_str : nullptr);
+        } else {
+            // Machine is ON, update each boiler independently
+            if (coffee_boiler_status) {
+                boiler_display_update(BOILER_COFFEE, machine_status, 
+                                     coffee_boiler_status, coffee_ready_time,
+                                     coffee_temp_str[0] ? coffee_temp_str : nullptr);
+            }
+            
+            if (steam_boiler_status) {
+                boiler_display_update(BOILER_STEAM, machine_status, 
+                                     steam_boiler_status, steam_ready_time,
+                                     steam_level_str[0] ? steam_level_str : nullptr);
+            }
+        }
+    } else {
+        Serial.println("⚠ No machine status found, skipping boiler updates");
+    }
+    
+    // Check for command responses
+    if (doc.containsKey("commands")) {
+        JsonArray commands = doc["commands"].as<JsonArray>();
+        if (commands.size() > 0) {
+            Serial.println("\n📋 Command responses:");
+            for (JsonVariant cmd : commands) {
+                const char* id = cmd["id"];
+                const char* status = cmd["status"];
+                if (id && status) {
+                    Serial.print("  ✓ Command ");
+                    Serial.print(id);
+                    Serial.print(": ");
+                    Serial.println(status);
+                }
+            }
+        }
+    }
+}
+
 void LaMarzoccoMachine::_websocket_message_handler(const String& message) {
     if (_instance) {
         // Parse JSON message with large buffer for La Marzocco messages (can be 2-3KB)
@@ -41,225 +264,8 @@ void LaMarzoccoMachine::_websocket_message_handler(const String& message) {
         
         Serial.println("✓ JSON parsed successfully");
         
-        // Variables to store extracted data
-        const char* machine_status = nullptr;
-        const char* machine_mode = nullptr;
-        const char* coffee_boiler_status = nullptr;
-        int64_t coffee_ready_time = 0;
-        float coffee_target_temp = 0.0;
-        const char* steam_boiler_status = nullptr;
-        int64_t steam_ready_time = 0;
-        const char* steam_target_level = nullptr;
-        bool no_water_alarm = false;
-        bool is_brewing = false;
-        int64_t brewing_start_time = 0;
-        
-        // Parse widgets array to extract boiler and machine status
-        if (doc.containsKey("widgets")) {
-            JsonArray widgets = doc["widgets"].as<JsonArray>();
-            Serial.print("Widgets count: ");
-            Serial.println(widgets.size());
-            
-            for (JsonVariant widget : widgets) {
-                const char* code = widget["code"];
-                if (!code) continue;
-                
-                // Extract machine status
-                if (strcmp(code, "CMMachineStatus") == 0) {
-                    Serial.println("✓ Found CMMachineStatus widget");
-                    JsonObject output = widget["output"].as<JsonObject>();
-                    
-                    machine_status = output["status"];
-                    machine_mode = output["mode"];
-                    
-                    // Check if brewing
-                    if (machine_status && strcmp(machine_status, "Brewing") == 0) {
-                        is_brewing = true;
-                        // Extract brewingStartTime
-                        if (output.containsKey("brewingStartTime") && !output["brewingStartTime"].isNull()) {
-                            brewing_start_time = output["brewingStartTime"].as<long long>();
-                            Serial.print("☕ Brewing started at: ");
-                            Serial.println((long long)brewing_start_time);
-                        }
-                    } else {
-                        is_brewing = false;
-                        brewing_start_time = 0;
-                    }
-                    
-                    if (machine_status) {
-                        _instance->_power_state = (strcmp(machine_status, "PoweredOn") == 0);
-                        Serial.print("📊 Machine status: ");
-                        Serial.print(machine_status);
-                        if (machine_mode) {
-                            Serial.print(" (mode: ");
-                            Serial.print(machine_mode);
-                            Serial.print(")");
-                        }
-                        Serial.println();
-                    }
-                }
-                // Extract coffee boiler status and ready time
-                else if (strcmp(code, "CMCoffeeBoiler") == 0) {
-                    Serial.println("☕ Found CMCoffeeBoiler widget");
-                    JsonObject output = widget["output"].as<JsonObject>();
-                    
-                    coffee_boiler_status = output["status"];
-                    if (output.containsKey("readyStartTime") && !output["readyStartTime"].isNull()) {
-                        coffee_ready_time = output["readyStartTime"].as<long long>();
-                    }
-                    if (output.containsKey("targetTemperature")) {
-                        coffee_target_temp = output["targetTemperature"].as<float>();
-                    }
-                    
-                    Serial.print("  Status: ");
-                    Serial.print(coffee_boiler_status ? coffee_boiler_status : "null");
-                    Serial.print(", TargetTemp: ");
-                    Serial.print(coffee_target_temp);
-                    Serial.print("°C, ReadyStartTime: ");
-                    Serial.println((long long)coffee_ready_time);
-                }
-                // Extract steam boiler status and ready time
-                else if (strcmp(code, "CMSteamBoilerLevel") == 0) {
-                    Serial.println("♨️  Found CMSteamBoilerLevel widget");
-                    JsonObject output = widget["output"].as<JsonObject>();
-                    
-                    steam_boiler_status = output["status"];
-                    if (output.containsKey("readyStartTime") && !output["readyStartTime"].isNull()) {
-                        steam_ready_time = output["readyStartTime"].as<long long>();
-                    }
-                    if (output.containsKey("targetLevel")) {
-                        steam_target_level = output["targetLevel"];
-                    }
-                    
-                    // Update internal steam state based on status
-                    if (steam_boiler_status) {
-                        if (strcmp(steam_boiler_status, "Off") != 0 && strcmp(steam_boiler_status, "StandBy") != 0) {
-                            _instance->_steam_state = true;
-                        } else {
-                            _instance->_steam_state = false;
-                        }
-                    }
-                    
-                    Serial.print("  Status: ");
-                    Serial.print(steam_boiler_status ? steam_boiler_status : "null");
-                    Serial.print(", TargetLevel: ");
-                    Serial.print(steam_target_level ? steam_target_level : "null");
-                    Serial.print(", ReadyStartTime: ");
-                    Serial.println((long long)steam_ready_time);
-                }
-                // Check for NoWater alarm
-                else if (strcmp(code, "CMNoWater") == 0) {
-                    Serial.println("💧 Found CMNoWater widget");
-                    JsonObject output = widget["output"].as<JsonObject>();
-                    
-                    if (output.containsKey("allarm")) {
-                        no_water_alarm = output["allarm"].as<bool>();
-                        Serial.print("  NoWater alarm: ");
-                        Serial.println(no_water_alarm ? "TRUE ⚠️" : "false");
-                    }
-                }
-            }
-        }
+        _process_dashboard(doc);
 
-        static bool last_brewing_state = false;
-        static bool last_brewing_state_valid = false;
-        if (machine_status) {
-            if (!last_brewing_state_valid || is_brewing != last_brewing_state) {
-                activity_monitor_mark_machine_activity();
-                bool was_brewing = last_brewing_state_valid && last_brewing_state;
-                last_brewing_state = is_brewing;
-                last_brewing_state_valid = true;
-                if (_instance && was_brewing && !is_brewing) {
-                    _instance->request_stats_refresh();
-                }
-            }
-        }
-        
-        // Check if any boiler reports NoWater status
-        if (coffee_boiler_status && strcmp(coffee_boiler_status, "NoWater") == 0) {
-            Serial.println("⚠️  Coffee boiler reports NoWater!");
-            no_water_alarm = true;
-        }
-        if (steam_boiler_status && strcmp(steam_boiler_status, "NoWater") == 0) {
-            Serial.println("⚠️  Steam boiler reports NoWater!");
-            no_water_alarm = true;
-        }
-        
-        // Update water alarm state
-        water_alarm_set(no_water_alarm);
-        
-        // Update brewing display
-        brewing_display_update(is_brewing, brewing_start_time);
-        
-        // Update boiler displays if we have machine status
-        // Boiler displays (labels) continue to update even during water alarm
-        // Only the arcs are hidden by water_alarm system
-        if (machine_status) {
-            Serial.println("\n🔄 Updating boiler displays...");
-            
-            // Format temperature and level strings
-            char coffee_temp_str[16] = "";
-            char steam_level_str[16] = "";
-            
-            if (coffee_target_temp > 0) {
-                snprintf(coffee_temp_str, sizeof(coffee_temp_str), "%.0f°C", coffee_target_temp);
-            }
-            
-            if (steam_target_level) {
-                // Convert "Level2" to "L2", "Level1" to "L1", etc.
-                if (strncmp(steam_target_level, "Level", 5) == 0) {
-                    snprintf(steam_level_str, sizeof(steam_level_str), "L%s", steam_target_level + 5);
-                } else {
-                    strncpy(steam_level_str, steam_target_level, sizeof(steam_level_str) - 1);
-                }
-            }
-            
-            // If machine is OFF or StandBy, use that for both boilers
-            if (strcmp(machine_status, "Off") == 0 || strcmp(machine_status, "StandBy") == 0) {
-                boiler_display_update(BOILER_COFFEE, machine_status, 
-                                     coffee_boiler_status ? coffee_boiler_status : "Off", 
-                                     coffee_ready_time,
-                                     coffee_temp_str[0] ? coffee_temp_str : nullptr);
-                boiler_display_update(BOILER_STEAM, machine_status, 
-                                     steam_boiler_status ? steam_boiler_status : "Off", 
-                                     steam_ready_time,
-                                     steam_level_str[0] ? steam_level_str : nullptr);
-            } else {
-                // Machine is ON, update each boiler independently
-                if (coffee_boiler_status) {
-                    boiler_display_update(BOILER_COFFEE, machine_status, 
-                                         coffee_boiler_status, coffee_ready_time,
-                                         coffee_temp_str[0] ? coffee_temp_str : nullptr);
-                }
-                
-                if (steam_boiler_status) {
-                    boiler_display_update(BOILER_STEAM, machine_status, 
-                                         steam_boiler_status, steam_ready_time,
-                                         steam_level_str[0] ? steam_level_str : nullptr);
-                }
-            }
-        } else {
-            Serial.println("⚠ No machine status found, skipping boiler updates");
-        }
-        
-        // Check for command responses
-        if (doc.containsKey("commands")) {
-            JsonArray commands = doc["commands"].as<JsonArray>();
-            if (commands.size() > 0) {
-                Serial.println("\n📋 Command responses:");
-                for (JsonVariant cmd : commands) {
-                    const char* id = cmd["id"];
-                    const char* status = cmd["status"];
-                    if (id && status) {
-                        Serial.print("  ✓ Command ");
-                        Serial.print(id);
-                        Serial.print(": ");
-                        Serial.println(status);
-                    }
-                }
-            }
-        }
-        
         Serial.println("===============================================\n");
     }
 }
@@ -369,6 +375,27 @@ void LaMarzoccoMachine::loop() {
         }
     }
 
+    // Every message from the cloud is a change notification. Nothing announces
+    // the state the machine is already in, so the first picture has to be
+    // fetched - otherwise a machine that simply sits there leaves the boilers
+    // blank until someone touches it. The same applies after a reconnect,
+    // which is exactly when a message was missed.
+    if (is_websocket_connected() && !_websocket_was_connected) {
+        _dashboard_refresh_pending = true;
+    }
+    _websocket_was_connected = is_websocket_connected();
+
+    if (_dashboard_refresh_pending) {
+        unsigned long now = millis();
+        static const unsigned long DASHBOARD_REFRESH_MIN_INTERVAL_MS = 30000;
+        if (_last_dashboard_refresh_ms == 0 ||
+            now - _last_dashboard_refresh_ms >= DASHBOARD_REFRESH_MIN_INTERVAL_MS) {
+            _dashboard_refresh_pending = false;
+            _last_dashboard_refresh_ms = now;
+            refresh_dashboard();
+        }
+    }
+
     // Auto-reconnect logic: If disconnected, try to reconnect periodically
     // This ensures we get a fresh access token instead of reusing an expired one
     static unsigned long last_reconnect_attempt = 0;
@@ -386,6 +413,29 @@ void LaMarzoccoMachine::loop() {
 
 void LaMarzoccoMachine::request_stats_refresh() {
     _stats_refresh_pending = true;
+}
+
+bool LaMarzoccoMachine::refresh_dashboard() {
+    String serial = _client.get_serial_number();
+    if (serial.length() == 0) {
+        return false;
+    }
+
+    JsonDocument response;
+    String endpoint = "/things/" + serial + "/dashboard";
+    if (!_client.api_call("GET", endpoint, nullptr, &response)) {
+        Serial.println("[REFRESH] Could not fetch the dashboard");
+        return false;
+    }
+
+    if (!response.containsKey("widgets")) {
+        Serial.println("[REFRESH] Dashboard response carried no widgets");
+        return false;
+    }
+
+    Serial.println("[REFRESH] Dashboard fetched over REST");
+    _process_dashboard(response);
+    return true;
 }
 
 void LaMarzoccoMachine::_refresh_shot_counters() {
