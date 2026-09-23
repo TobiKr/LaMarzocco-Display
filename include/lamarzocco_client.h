@@ -30,6 +30,10 @@ public:
     
     // Get access token (sign in or refresh)
     bool get_access_token();
+
+    // HTTP status of the last sign in attempt. A 4xx is the server saying it
+    // rejected the credentials; anything else means the answer never arrived.
+    int get_last_auth_status() const { return _last_auth_status; }
     
     // Make authenticated API call
     bool api_call(const String& method, const String& endpoint, JsonDocument* request_body, JsonDocument* response_body);
@@ -47,6 +51,7 @@ public:
     String get_access_token_string() const { return _access_token.access_token; }
     
 private:
+    int _last_auth_status = 0;
     Preferences& _prefs;
     InstallationKey _installation_key;
     AccessToken _access_token;

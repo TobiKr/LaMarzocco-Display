@@ -219,21 +219,58 @@ void setup()
             // Note: Registration failures are not critical, will retry during API calls
           }
           
-          // Try to get access token (authenticate)
-          if (!g_client->get_access_token()) {
-            debugln("Authorization failed - invalid credentials");
-            
+          // Try to get access token (authenticate). A single attempt used to
+          // be enough to declare the credentials invalid, so one request that
+          // timed out during startup cost the whole session - and told the user
+          // their password was wrong.
+          bool authorized = false;
+          for (int attempt = 1; attempt <= AUTH_ATTEMPTS_AT_STARTUP; attempt++) {
+            authorized = g_client->get_access_token();
+            if (authorized) {
+              break;
+            }
+
+            int status = g_client->get_last_auth_status();
+            Serial.printf("[AUTH] Sign in attempt %d of %d failed, status %d\n",
+                          attempt, AUTH_ATTEMPTS_AT_STARTUP, status);
+
+            // A 4xx is the server answering that it rejected the credentials.
+            // Retrying cannot change that; anything else is worth another try.
+            if (status >= 400 && status < 500) {
+              break;
+            }
+            if (attempt < AUTH_ATTEMPTS_AT_STARTUP) {
+              delay(AUTH_RETRY_DELAY_MS);
+            }
+          }
+
+          int auth_status = g_client->get_last_auth_status();
+
+          if (!authorized && auth_status >= 400 && auth_status < 500) {
+            debugln("Authorization failed - the server rejected the credentials");
 
             showNoConnectionScreen(
               "Authorization Failed!\n"
               "Invalid credentials\n"
               "Please restart WiFi Setup"
             );
-            
+
             delete g_client;
             g_client = nullptr;
             setupWEB();
           } else {
+            if (!authorized) {
+              // The cloud could not be reached, which the credentials are not
+              // to blame for. Carry on and build the websocket anyway: its
+              // reconnect in loop() signs in again every thirty seconds, so the
+              // display recovers on its own instead of waiting for a restart.
+              //
+              // Deliberately no error screen - nothing ever switches back from
+              // one, so it would outlive the problem it reports.
+              Serial.println("[AUTH] Could not sign in at startup, the websocket "
+                             "reconnect will keep trying");
+            }
+
             // Initialize websocket and machine
             g_websocket = new LaMarzoccoWebSocket(*g_client);
             g_machine = new LaMarzoccoMachine(*g_client, *g_websocket);

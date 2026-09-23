@@ -26,6 +26,12 @@ static constexpr const char *NTP_SERVER = "pool.ntp.org";
 #define DISPLAY_BRIGHTNESS_DIM  30
 #define DISPLAY_ROTATION  2
 
+// How often the sign in at startup is retried before giving up, and the pause
+// between attempts. Only transport errors are retried; a rejected credential
+// is final.
+#define AUTH_ATTEMPTS_AT_STARTUP  3
+#define AUTH_RETRY_DELAY_MS  (3UL * 1000UL)
+
 #define uS_TO_S_FACTOR 1000000ULL
 
 #endif
