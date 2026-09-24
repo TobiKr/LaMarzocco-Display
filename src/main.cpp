@@ -60,11 +60,34 @@ bool connectToWiFi(const String &ssid, const String &password)
   }
 }
 
+// LilyGo_AMOLED::isVbusIn() only queries a charger chip on the board variants
+// that carry one. On every other board it falls through to `return false`,
+// which is indistinguishable from "running on battery" - and the 1.91" QSPI
+// board this firmware is built for is one of those.
+static bool boardReportsVbus()
+{
+  switch (amoled.getBoardID()) {
+    case LILYGO_AMOLED_147:      // AXP2101
+    case LILYGO_AMOLED_241:      // SY6970
+    case LILYGO_AMOLED_191_SPI:  // BQ25896
+      return true;
+    default:
+      return false;
+  }
+}
+
 void updateSerialLoggingPowerState(bool force)
 {
   static bool serial_enabled = true;
   static unsigned long last_check_ms = 0;
   unsigned long now = millis();
+
+  // Without a usable reading this shuts down USB serial on a device that is
+  // plainly USB powered, and never turns it back on: the port disappears
+  // mid-session and only a reset brings it back.
+  if (!boardReportsVbus()) {
+    return;
+  }
 
   if (!force && (now - last_check_ms) < 5000) {
     return;
